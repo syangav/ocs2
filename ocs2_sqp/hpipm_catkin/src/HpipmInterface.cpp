@@ -39,6 +39,8 @@ extern "C" {
 #include <hpipm_timing.h>
 }
 
+#include <iostream>
+
 namespace {
 /**
  * Manages a block of memory. Allows reuse of memory blocks if the required size does not exceed the old size.
@@ -161,6 +163,44 @@ class HpipmInterface::Impl {
       }
     }
     // TODO: expand with state-input size checks
+  }
+
+  hpipm_status solveTrustRegion(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
+                                std::vector<ScalarFunctionQuadraticApproximation>& cost,
+                                std::vector<VectorFunctionLinearApproximation>* constraints, vector_array_t& stateTrajectory,
+                                vector_array_t& inputTrajectory, const scalar_t& radius, scalar_t& lambda, const scalar_t& gamma,
+                                bool verbose) {
+    // trial running, for lambda = 0
+    lambda = 0.0;
+    hpipm_status currentStatus = solve(x0, dynamics, cost, constraints, stateTrajectory, inputTrajectory, verbose);
+    scalar_t inputSumSquaredNorm = 0.0;
+    const int N = ocpSize_.numStages;
+    for (int i = 0; i < N; i++) {
+      inputSumSquaredNorm += inputTrajectory[i].squaredNorm();
+    }
+    int trustRegionItr = 1;
+    while (std::sqrt(inputSumSquaredNorm) > radius) {
+      matrix_array_t feedbackMatrices = getRiccatiFeedback(dynamics[0], cost[0]);
+      scalar_t qSumSquaredNorm = getTrustRegion_q_Norm(dynamics, inputTrajectory, feedbackMatrices);
+      // Newton step to get dLamdba
+      scalar_t dLambda = inputSumSquaredNorm * (gamma * std::sqrt(inputSumSquaredNorm) - radius) / qSumSquaredNorm / radius;
+      lambda += dLambda;
+      for (int i = 0; i < N; i++) {
+        cost[i].dfduu += dLambda * ocs2::matrix_t::Identity(ocpSize_.numInputs[i], ocpSize_.numInputs[i]);
+      }
+      currentStatus = solve(x0, dynamics, cost, constraints, stateTrajectory, inputTrajectory, verbose);
+      inputSumSquaredNorm = 0.0;
+      for (int i = 0; i < N; i++) {
+        inputSumSquaredNorm += inputTrajectory[i].squaredNorm();
+      }
+      trustRegionItr++;
+    }
+    std::cout << "leaving trust region iteration\n";
+    std::cout << "# of iteration: " << trustRegionItr << std::endl;
+    std::cout << "lambda: " << lambda << std::endl;
+    std::cout << "input norm: " << std::sqrt(inputSumSquaredNorm) << std::endl;
+
+    return currentStatus;
   }
 
   hpipm_status solve(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
@@ -325,6 +365,36 @@ class HpipmInterface::Impl {
       }
     }
     return true;
+  }
+
+  scalar_t getTrustRegion_q_Norm(const std::vector<VectorFunctionLinearApproximation>& dynamics, const vector_array_t& inputTrajectory,
+                                 const matrix_array_t& feedbackMatrices) {
+    // dynamics.size() = N
+    // inputTrajectory.size() = N
+    // feedbackMatrices.size() = N
+    const int N = ocpSize_.numStages;
+    const int nx = ocpSize_.numStates[N];
+    vector_array_t TrustRegionStep(N);
+    vector_array_t alpha(N);
+    matrix_t Lr;
+    scalar_t qSumSquaredNorm = 0.0;
+    for (int i = N - 1; i >= 0; i--) {
+      alpha[i] = inputTrajectory[i];
+      for (int j = i + 1; j < N; j++) {
+        matrix_t tmp = ocs2::matrix_t::Identity(nx, nx);
+        for (int l = i + 1; l <= j - 1; l++) {
+          tmp *= dynamics[l].dfdx.transpose();
+        }
+        alpha[i] += dynamics[i].dfdu.transpose() * tmp * feedbackMatrices[j].transpose() * alpha[j];
+      }
+      Lr.resize(ocpSize_.numInputs[i], ocpSize_.numInputs[i]);
+      d_ocp_qp_ipm_get_ric_Lr(&qp_, &arg_, &workspace_, i, Lr.data());  // Lr matrix is lower triangular
+
+      TrustRegionStep[i] = Lr.triangularView<Eigen::Lower>().solve(alpha[i]);
+      qSumSquaredNorm += TrustRegionStep[i].squaredNorm();
+    }
+
+    return qSumSquaredNorm;
   }
 
   matrix_array_t getRiccatiFeedback(const VectorFunctionLinearApproximation& dynamics0, const ScalarFunctionQuadraticApproximation& cost0) {
@@ -536,6 +606,14 @@ hpipm_status HpipmInterface::solve(const vector_t& x0, std::vector<VectorFunctio
                                    std::vector<VectorFunctionLinearApproximation>* constraints, vector_array_t& stateTrajectory,
                                    vector_array_t& inputTrajectory, bool verbose) {
   return pImpl_->solve(x0, dynamics, cost, constraints, stateTrajectory, inputTrajectory, verbose);
+}
+
+hpipm_status HpipmInterface::solveTrustRegion(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
+                                              std::vector<ScalarFunctionQuadraticApproximation>& cost,
+                                              std::vector<VectorFunctionLinearApproximation>* constraints, vector_array_t& stateTrajectory,
+                                              vector_array_t& inputTrajectory, const scalar_t& radius, scalar_t lambda,
+                                              const scalar_t& gamma, bool verbose) {
+  return pImpl_->solveTrustRegion(x0, dynamics, cost, constraints, stateTrajectory, inputTrajectory, radius, lambda, gamma, verbose);
 }
 
 std::vector<ScalarFunctionQuadraticApproximation> HpipmInterface::getRiccatiCostToGo(const VectorFunctionLinearApproximation& dynamics0,

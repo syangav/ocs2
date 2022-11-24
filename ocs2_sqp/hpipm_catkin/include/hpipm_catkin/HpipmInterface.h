@@ -88,6 +88,35 @@ class HpipmInterface {
                      vector_array_t& stateTrajectory, vector_array_t& inputTrajectory, bool verbose = false);
 
   /**
+   * Solves a discrete linear quadratic optimal control problem under trust region constraint. The interface needs to be resized to a
+   * consistent OcpSize before calling this function
+   *
+   * The problem should be consistently defined in absolute or delta decision variables in x and u.
+   *
+   * @param x0 : Initial state (deviation).
+   * @param dynamics : Linearized approximation of the discrete dynamics.
+   * @param cost : Quadratic approximation of the cost.
+   * @param constraints : Linearized approximation of constraints, all constraints are mapped to inequality constraints in HPIPM.
+   * @param [out] stateTrajectory : Solution state (deviation) trajectory.
+   * @param [out] inputTrajectory : Solution input (deviation) trajectory.
+   * @param radius : user-defined trust region radius to limit inputTrajectory norm
+   * @param [out] lambda : the Lagrangian multiplier w.r.t the trust region constraint
+   * @param gamma : user-defined parameter, for update dLambda in a way similar to line search
+   * @param verbose : Prints the HPIPM iteration statistics if true.
+   * @return HPIPM returned with flag hpipm_status::
+   *    SUCCESS = QP solved;
+   *    MAX_ITER = Maximum number of iterations reached;
+   *    MIN_STEP = Minimum step length reached;
+   *    NAN_SOL = NaN in computations;
+   *    INCONS_EQ = Unconsistent equality constraints;
+   */
+  hpipm_status solveTrustRegion(const vector_t& x0, std::vector<VectorFunctionLinearApproximation>& dynamics,
+                                std::vector<ScalarFunctionQuadraticApproximation>& cost,
+                                std::vector<VectorFunctionLinearApproximation>* constraints, vector_array_t& stateTrajectory,
+                                vector_array_t& inputTrajectory, const scalar_t& radius, scalar_t lambda, const scalar_t& gamma,
+                                bool verbose = false);
+
+  /**
    * Return the Riccati cost-to-go for the previously solved problem.
    * Extra information about the initial stage is needed to complete calculation.
    *

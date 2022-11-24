@@ -338,3 +338,57 @@ TEST(test_hpiphm_interface, retrieveRiccati) {
     ASSERT_TRUE(uSol[k].isApprox(KSol[k] * xSol[k] + kSol[k]));
   }
 }
+
+TEST(test_hpiphm_interface, trust_region) {
+  int nx = 3;
+  int nu = 2;
+  int N = 5;
+
+  // Problem setup
+  ocs2::vector_t x0 = ocs2::vector_t::Random(nx);
+  std::vector<ocs2::VectorFunctionLinearApproximation> system;
+  std::vector<ocs2::ScalarFunctionQuadraticApproximation> cost;
+  for (int k = 0; k < N; k++) {
+    system.emplace_back(ocs2::getRandomDynamics(nx, nu));
+    cost.emplace_back(ocs2::getRandomCost(nx, nu));
+  }
+  cost.emplace_back(ocs2::getRandomCost(nx, 0));
+
+  // Interface
+  ocs2::HpipmInterface::OcpSize ocpSize(N, nx, nu);
+  ocs2::HpipmInterface hpipmInterface(ocpSize);
+
+  // Solve!
+  std::vector<ocs2::vector_t> xSol;
+  std::vector<ocs2::vector_t> uSol;
+  const auto status = hpipmInterface.solve(x0, system, cost, nullptr, xSol, uSol, true);
+  ASSERT_EQ(status, hpipm_status::SUCCESS);
+
+  // for unconstrained problem
+  ocs2::scalar_t uSumSquaredNorm = 0.0;
+  std::cout << "======== unconstrained version ========\n";
+  for (int k = 0; k < N; k++) {
+    std::cout << "current stage is: " << k << std::endl;
+    std::cout << uSol[k] << std::endl;
+    uSumSquaredNorm += uSol[k].squaredNorm();
+  }
+  std::cout << "u sum norm: " << std::sqrt(uSumSquaredNorm) << std::endl;
+
+  // for trust region problem
+  ocs2::scalar_t radius = 0.3;
+  ocs2::scalar_t gamma = 1.0001;
+  ocs2::scalar_t lambda;
+  std::vector<ocs2::vector_t> xSolTrustRegion;
+  std::vector<ocs2::vector_t> uSolTrustRegion;
+  const auto statusTrustRegion =
+      hpipmInterface.solveTrustRegion(x0, system, cost, nullptr, xSolTrustRegion, uSolTrustRegion, radius, lambda, gamma, true);
+  ASSERT_EQ(statusTrustRegion, hpipm_status::SUCCESS);
+  uSumSquaredNorm = 0.0;
+  std::cout << "======== trust region version ========\n";
+  for (int k = 0; k < N; k++) {
+    std::cout << "current stage is: " << k << std::endl;
+    std::cout << uSolTrustRegion[k] << std::endl;
+    uSumSquaredNorm += uSolTrustRegion[k].squaredNorm();
+  }
+  std::cout << "u sum norm: " << std::sqrt(uSumSquaredNorm) << std::endl;
+}
